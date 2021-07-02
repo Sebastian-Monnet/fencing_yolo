@@ -14,24 +14,32 @@ import datetime
 import copy
 import yaml
 import random
+import sklearn
+import pickle
 
 
 class Clip:
-    def __init__(self, ind, step_size=5, model=None):
+    def __init__(self, ind, svm, step_size=5, model=None):
         self.step_size = step_size
         self.brightness_thresh = 50
         self.dist_thresh = 10
         self.comp_time_lag = 40
-        self.top_crop = 70
-        self.bottom_crop = 300
+        self.top_crop = 60 / 360
+        self.bottom_crop = 310 / 360
         self.width_thresh = 10
+        self.linreg_tol = 3
 
-        self.vid = Clip.load_vid(ind)[:, self.top_crop: self.bottom_crop]
+        self.svm = svm
+
+        self.vid = Clip.load_vid(ind)
+        self.vid = self.vid[:, int(self.top_crop *  self.vid.shape[1]): int(self.bottom_crop * self.vid.shape[1])]
         self.vid_ind = ind
         self.box_list_list = [None for i in self.vid]
 
         self.left_list = [None for i in self.vid]
         self.right_list = [None for i in self.vid]
+
+        self.ref_depth = self.vid.shape[1] - 5
 
         if model is None:
             model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
@@ -103,7 +111,7 @@ class Clip:
         for i, box_list in enumerate(self.box_list_list):
             if box_list is not None:
                 for box in box_list:
-                    self.draw_box(i, box, colour_channel=1)
+                    self.draw_box(i, box, colour_channel=0)
 
 
     def draw_all_boxes_on_vid(self):
@@ -114,10 +122,10 @@ class Clip:
                 self.draw_right_on_frame(i)
 
     def draw_left_on_frame(self, frame_ind):
-        self.draw_box(frame_ind, self.left_list[frame_ind])
+        self.draw_box(frame_ind, self.left_list[frame_ind], colour_channel=2)
 
     def draw_right_on_frame(self, frame_ind):
-        self.draw_box(frame_ind, self.right_list[frame_ind])
+        self.draw_box(frame_ind, self.right_list[frame_ind], colour_channel=1)
 
 
 
@@ -146,39 +154,50 @@ class Clip:
         x_min, y_min, x_max, y_max = [int(a.item()) for a in box]
         return self.vid[frame_ind][y_min: y_max, x_min: x_max]
 
-    def is_bright_enough(self, subframe):
-        w, h = subframe.shape[1], subframe.shape[0]
-        subsubframe = subframe[h // 3: (2 * h)//3, w//3 : (2 * w)//3]
-        if np.mean(subsubframe) > self.brightness_thresh:
-            return True
-        return False
 
     @staticmethod
     def get_box_perimeter(box):
         return 2 * (box[2] - box[0] + box[3] - box[1])
 
-    def prune_dark_boxes(self):
+
+
+    @staticmethod
+    def get_features(im):
+        re_size = 3
+        h, w = im.shape[0], im.shape[1]
+
+        im = cv.cvtColor(im, cv.COLOR_BGR2GRAY)
+        im = cv.resize(im, (re_size, re_size))
+        ftrs = np.zeros(re_size * re_size + 2)
+        ftrs[:re_size * re_size] = im.flatten()
+        ftrs[re_size * re_size] = h
+        ftrs[re_size * re_size + 1] = w
+
+        return ftrs
+
+    def prune_non_fencers(self):
         for i, box_list in enumerate(self.box_list_list):
             if box_list is None:
                 continue
             new_list = []
             for box in box_list:
-                subframe = self.get_box_subframe(box, i)
-                if self.is_bright_enough(subframe):
+                subim = self.get_box_subframe(box, i)
+                ftrs = Clip.get_features(subim)
+                pred = self.svm.predict([ftrs])
+                if pred[0] == 1:
                     new_list.append(box)
             self.box_list_list[i] = new_list
 
-    def prune_wide_boxes(self):
+    def prune_low_boxes(self):
         for i, box_list in enumerate(self.box_list_list):
             if box_list is None:
                 continue
             new_list = []
             for box in box_list:
-                w = box[2] - box[0]
-                h = box[3] - box[1]
-                if w < self.width_thresh * h:
+                if box[3] <= self.ref_depth or box[1] <= self.vid.shape[1] / 2:
                     new_list.append(box)
             self.box_list_list[i] = new_list
+
 
 
     def prune_small_boxes(self):
@@ -207,6 +226,43 @@ class Clip:
             second_lowest = y_max_list[-2]
             new_list = [box for box in box_list if box[3] >= second_lowest]
             self.box_list_list[i] = new_list
+
+    def prune_with_linreg(self):
+        not_none = [i for i in range(len(self.box_list_list)) if self.box_list_list[i] is not None]
+        X_list = []
+        y_list = []
+
+        for i in not_none:
+            for box in self.box_list_list[i]:
+                cent = Clip.get_box_centre(box)
+                X_list.append([cent[0]])
+                y_list.append([cent[1]])
+                
+        X_arr = np.array(X_list)
+        y_arr = np.array(y_list)
+
+        linreg = sklearn.linear_model.LinearRegression()
+        linreg.fit(X_arr, y_arr)
+        
+        res_arr = linreg.predict(X_arr) - y_arr
+        
+        std = np.std(res_arr)
+
+        for i in not_none:
+            new_list = []
+            for box in self.box_list_list[i]:
+                cent = Clip.get_box_centre(box)
+                x, y= cent[0], cent[1]
+                y_pred = linreg.predict([[x]])[0][0]
+                if abs(y_pred - y) <= self.linreg_tol * std:
+                    new_list.append(box)
+            self.box_list_list[i] = new_list
+
+
+
+
+
+
 
     # ------------------------------------ Work with boxes
     @staticmethod
@@ -355,13 +411,15 @@ class Clip:
     def main(self, step_size=5):
         self.step_size = step_size
         self.compute_boxes_for_vid()
-        self.prune_dark_boxes()
+        self.prune_non_fencers()
         self.prune_small_boxes()
-        self.prune_wide_boxes()
+        self.prune_low_boxes()
         self.prune_high_boxes()
+        self.prune_with_linreg()
+
         self.extract_left_right()
-        self.add_more_left_right()
         self.prune_inconsistencies_vid()
+        self.add_more_left_right()
         self.interpolate_vid_left()
         self.interpolate_vid_right()
 
@@ -372,18 +430,19 @@ class Clip:
 
 
 model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
+svm = pickle.load(open('/Users/sebastianmonnet/PycharmProjects/yolov5_fencing/svm.pt', 'rb'))
 
 start = datetime.datetime.now()
 clip_ind = random.randint(1, 12300)
 print(clip_ind)
-a = Clip(8015, model=model)
+a = Clip(12205, svm, model=model)
 a.main(5)
 
 print(datetime.datetime.now() - start)
-a.play_vid(120, start=120)
+a.play_vid(120, start=30)
 
 
-
+# troublesome inds: 8015 (ref), 4312 (missing fencer), 723 (cross), 7848, 8135, 11315, 12205
 
 
 
