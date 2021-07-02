@@ -19,21 +19,22 @@ import pickle
 
 
 class Clip:
-    def __init__(self, ind, svm, step_size=5, model=None):
+    def __init__(self, loc, svm, step_size=5, model=None):
         self.step_size = step_size
         self.brightness_thresh = 50
-        self.dist_thresh = 10
+        self.x_dist_thresh = 10
+        self.y_dist_thresh = 5
         self.comp_time_lag = 40
-        self.top_crop = 60 / 360
+        self.top_crop = 0 / 360
         self.bottom_crop = 310 / 360
         self.width_thresh = 10
         self.linreg_tol = 3
 
         self.svm = svm
 
-        self.vid = Clip.load_vid(ind)
+        self.vid = Clip.load_vid(loc)
         self.vid = self.vid[:, int(self.top_crop *  self.vid.shape[1]): int(self.bottom_crop * self.vid.shape[1])]
-        self.vid_ind = ind
+        self.vid_ind = loc
         self.box_list_list = [None for i in self.vid]
 
         self.left_list = [None for i in self.vid]
@@ -49,10 +50,13 @@ class Clip:
     # ---------------------------------------------- Load and play video
 
     @staticmethod
-    def load_vid(ind):
-        path = 'clips/' + str(ind) + '.mp4'
-        if not os.path.isfile(path):
-            Clip.download_clip('clips/', ind)
+    def load_vid(loc):
+        if type(loc) == str:
+            path = loc
+        else:
+            path = 'clips/' + str(loc) + '.mp4'
+            if not os.path.isfile(path):
+                Clip.download_clip(path)
         cap = cv.VideoCapture(path)
         frame_list = []
         while cap.isOpened():
@@ -147,6 +151,7 @@ class Clip:
         for frame_ind in range(0, len(self.vid), step_size):
             self.compute_boxes_for_frame(frame_ind)
         self.compute_boxes_for_frame(len(self.box_list_list) - 1)
+        self.raw_box_list_list = copy.deepcopy(self.box_list_list)
 
     # ----------------------------------------------- Prune boxes
 
@@ -268,6 +273,8 @@ class Clip:
     @staticmethod
     def get_box_centre(box):
         # returns as (x, y)
+        if box is None:
+            return None
         return (box[0] + box[2]) / 2, (box[1] + box[3])/2
 
     @staticmethod
@@ -277,8 +284,6 @@ class Clip:
         x2, y2 = Clip.get_box_centre(box_2)
 
         return abs(x2 - x1) + abs(y2 - y1)
-
-
 
     # ----------------------------------- Reduce to two fencers
 
@@ -294,13 +299,13 @@ class Clip:
                 self.right_list[i] = right
 
 
-
-
     def add_more_left_right(self):
         last_left_dic = {}
         last_right_dic = {}
         last_left = None
         last_right = None
+        x_thresh = self.x_dist_thresh * self.step_size
+        y_thresh = self.y_dist_thresh * self.step_size
         for i in range(len(self.box_list_list)):
             if self.left_list[i] is not None:
                 last_left = i
@@ -313,19 +318,34 @@ class Clip:
             if box_list is None:
                 continue
             for box in box_list:
+                cent = Clip.get_box_centre(box)
+                if last_left_dic[i] is not None:
+                    left_cent = Clip.get_box_centre(self.left_list[last_left_dic[last_left_dic[i]]])
+                if last_right_dic[i] is not None:
+                    right_cent = Clip.get_box_centre(self.right_list[last_right_dic[last_right_dic[i]]])
+
                 if last_left_dic[i] is None:
                     pass
-                elif Clip.get_box_distance(box, self.left_list[last_left_dic[i]]) < self.dist_thresh * self.step_size:
+                elif abs(cent[0] - left_cent[0]) < x_thresh and abs(cent[1] - left_cent[1]) < y_thresh:
                     self.left_list[i] = box
                 if last_right_dic[i] is None:
                     pass
-                elif Clip.get_box_distance(box, self.right_list[last_right_dic[i]]) < self.dist_thresh * self.step_size:
+                elif abs(cent[0] - right_cent[0]) < x_thresh and abs(cent[1] - right_cent[1]) < y_thresh:
                     self.right_list[i] = box
 
     # ------------------------------ get consistent subgraph
 
+    '''def are_connected(self, box_list, ind1, ind2):
+        cent_1 = Clip.get_box_centre(box_list[ind1])
+        cent_2 = Clip.get_box_centre(box_list[ind2])
+
+        x_thresh = abs(ind2 - ind1) * self.x_dist_thresh
+        y_thresh = abs(ind2 - ind1) * self.y_dist_thresh
+        
+        return abs(cent_1[0] - cent_2[0]) < x_thresh and abs(cent_1[1] - cent_2[1]) < y_thresh'''
+
     def are_connected(self, box_list, ind1, ind2):
-        return Clip.get_box_distance(box_list[ind1], box_list[ind2]) < self.dist_thresh * abs(ind2 - ind1)
+        return Clip.get_box_distance(box_list[ind1], box_list[ind2]) < 10 * abs(ind2 - ind1)
 
     def get_comps(self, box_list):
         non_none = [i for i in range(len(box_list)) if box_list[i] is not None]
@@ -426,20 +446,48 @@ class Clip:
         self.draw_all_boxes_on_vid()
         self.draw_original_boxes_on_vid()
 
+    def get_data(self):
+        return self.raw_box_list_list, self.box_list_list, self.left_list, self.right_list
+
+    def save_data(self, dir, filename):
+        pickle.dump(self.raw_box_list_list, open(os.path.join(dir, 'raw_box_list_lists', filename), 'wb'))
+        pickle.dump(self.box_list_list, open(os.path.join(dir, 'box_list_lists', filename), 'wb'))
+        pickle.dump(self.left_list, open(os.path.join(dir, 'left_lists', filename), 'wb'))
+        pickle.dump(self.right_list, open(os.path.join(dir, 'right_lists', filename), 'wb'))
+
+
+
+
 
 
 
 model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
 svm = pickle.load(open('/Users/sebastianmonnet/PycharmProjects/yolov5_fencing/svm.pt', 'rb'))
 
-start = datetime.datetime.now()
-clip_ind = random.randint(1, 12300)
-print(clip_ind)
-a = Clip(12205, svm, model=model)
-a.main(5)
+a = Clip(12010, svm, model=model)
+a.main()
+a.play_vid(60)
 
-print(datetime.datetime.now() - start)
-a.play_vid(120, start=30)
+'''clip_inds = [i for i in range(11900, 12100, 10)]
+
+for ind in clip_inds:
+    Clip.download_clip('clips/', ind)
+
+for ind in clip_inds:
+    print('ind:', ind)
+    start = datetime.datetime.now()
+    path = 'clips/' + str(ind) + '.mp4'
+    print(path)
+    a = Clip(path, svm, model=model)
+    a.main()
+    a.save_data('extracted_data', str(ind) + '.pt')
+    print(datetime.datetime.now() - start)'''
+
+
+
+
+
+
 
 
 # troublesome inds: 8015 (ref), 4312 (missing fencer), 723 (cross), 7848, 8135, 11315, 12205
