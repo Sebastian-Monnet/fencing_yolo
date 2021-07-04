@@ -9,14 +9,12 @@ import cv2 as cv
 import numpy as np
 import urllib
 import requests
-import seaborn
 import datetime
 import copy
 import yaml
-import random
 import sklearn
 import pickle
-
+import csv
 
 class Clip:
     def __init__(self, loc, svm, step_size=5, model=None):
@@ -26,19 +24,24 @@ class Clip:
         self.y_dist_thresh = 5
         self.comp_time_lag = 40
         self.top_crop = 0 / 360
-        self.bottom_crop = 310 / 360
+        self.bottom_crop = 341 / 360
         self.width_thresh = 10
         self.linreg_tol = 3
+        self.vert_IOU_thresh = 0.7
+        self.grid_size = 10
 
         self.svm = svm
 
         self.vid = Clip.load_vid(loc)
         self.vid = self.vid[:, int(self.top_crop *  self.vid.shape[1]): int(self.bottom_crop * self.vid.shape[1])]
+        self.disp_arr = [None for frame in self.vid]
         self.vid_ind = loc
         self.box_list_list = [None for i in self.vid]
 
         self.left_list = [None for i in self.vid]
         self.right_list = [None for i in self.vid]
+        self.true_left_list = [None for i in self.vid]
+        self.true_right_list = [None for i in self.vid]
 
         self.ref_depth = self.vid.shape[1] - 5
 
@@ -79,13 +82,59 @@ class Clip:
 
     def play_vid(self, wait=30, start=0):
         vid = self.vid.astype('uint8')
-        for frame in vid[start:]:
+        for i, frame in enumerate(vid[start:]):
+            if self.disp_arr[i + start] is not None:
+                print('disp', self.disp_arr[i+start])
+                print('True positions:', self.true_left_list[i+start], self.true_right_list[i+start])
             cv.imshow(str(self.vid_ind), frame)
+            cv.waitKey(wait)
+
+    def play_vid_with_disp(self, wait=30, start=0):
+        vid = self.vid.astype('uint8')
+        min_disp, max_disp = min(self.disp_arr), max(self.disp_arr)
+
+        for i, frame in enumerate(vid[start:]):
+            new_frame = np.zeros((frame.shape[0], int(max_disp - min_disp + frame.shape[1]) + 1, 3), dtype='uint8')
+            disp = self.disp_arr[i + start]
+            #new_frame[:, int(disp - min_disp) : int(disp - min_disp + frame.shape[1])] = frame
+            new_frame[:, int(max_disp - disp) : int(frame.shape[1] + max_disp - disp)] = frame
+
+            cv.imshow(str(self.vid_ind), new_frame)
             cv.waitKey(wait)
 
     def show_frame(self, frame_ind):
         cv.imshow(str(self.vid_ind), self.vid[frame_ind])
         cv.waitKey(10000)
+
+    # ------------------------------------------------- Look for lights
+    def is_left_red(self, frame_ind):
+        pix = self.vid[frame_ind, 330, 90]
+        return pix[2] > 250
+
+    def is_right_white(self, frame_ind):
+        pix = self.vid[frame_ind, 337, 392]
+        return pix[0] == 255 and pix[1] == 255 and pix[2] == 255
+
+    def is_right_green(self, frame_ind):
+        pix = self.vid[frame_ind, 330, 410]
+        return pix[1] > 245
+
+    def is_left_white(self, frame_ind):
+        pix = self.vid[frame_ind, 340, 240]
+        return pix[0] == 255 and pix[1] == 254 and pix[2] == 255
+
+    def get_left_light_time(self):
+        num_frames = len(self.box_list_list)
+        for frame_ind in range(num_frames - 80, num_frames):
+            if self.is_left_white(frame_ind) or self.is_left_red(frame_ind):
+                return frame_ind
+
+    def get_right_light_time(self):
+        num_frames = len(self.box_list_list)
+        for frame_ind in range(num_frames - 80, num_frames):
+            if self.is_right_white(frame_ind) or self.is_right_green(frame_ind):
+                return frame_ind
+
 
     # -------------------------------------------------- Draw on video
 
@@ -264,11 +313,6 @@ class Clip:
             self.box_list_list[i] = new_list
 
 
-
-
-
-
-
     # ------------------------------------ Work with boxes
     @staticmethod
     def get_box_centre(box):
@@ -344,8 +388,35 @@ class Clip:
         
         return abs(cent_1[0] - cent_2[0]) < x_thresh and abs(cent_1[1] - cent_2[1]) < y_thresh'''
 
+    #def are_connected(self, box_list, ind1, ind2):
+    #    return Clip.get_box_distance(box_list[ind1], box_list[ind2]) < 10 * abs(ind2 - ind1)
+
     def are_connected(self, box_list, ind1, ind2):
-        return Clip.get_box_distance(box_list[ind1], box_list[ind2]) < 10 * abs(ind2 - ind1)
+        box1 = box_list[ind1]
+        box2 = box_list[ind2]
+        IOU = Clip.vert_IOU(box1, box2)
+
+        cent_1 = Clip.get_box_centre(box1)
+        cent_2 = Clip.get_box_centre(box2)
+
+        x_thresh = abs(ind2 - ind1) * self.x_dist_thresh
+
+        return IOU > self.vert_IOU_thresh and cent_2[0] - cent_1[0] < x_thresh
+
+    @staticmethod
+    def vert_IOU(box1, box2):
+        if box1[1] > box2[1]:
+            box1, box2 = box2, box1
+        x1_min, y1_min, x1_max, y1_max = box1
+        x2_min, y2_min, x2_max, y2_max = box2
+
+        if y1_max < y2_min:
+            return 0
+
+        intersection = y1_max - y2_min
+        union = (y2_max - y2_min) + (y1_max - y1_min) - intersection
+
+        return intersection / union
 
     def get_comps(self, box_list):
         non_none = [i for i in range(len(box_list)) if box_list[i] is not None]
@@ -381,9 +452,6 @@ class Clip:
     def prune_inconsistencies_vid(self):
         self.prune_inconsistencies_single_list(self.left_list)
         self.prune_inconsistencies_single_list(self.right_list)
-
-
-
 
     # ------------------------------------- Interpolate boxes
 
@@ -426,6 +494,60 @@ class Clip:
         self.interpolate_vid_left()
         self.interpolate_vid_right()
 
+    # --------------------------------------------------- Frame displacement
+
+    def get_vel_arr(self, old, new):
+        '''
+        input: two consecutive frames of video
+        output: 2-dim numpy array
+        Calculates optical flow in a grid of pixels, and returns the x-componenets as a 2-dim numpy array
+        '''
+        old = cv.GaussianBlur(cv.cvtColor(old, cv.COLOR_BGR2GRAY), (3, 3), 0, 0)
+        new = cv.GaussianBlur(cv.cvtColor(new, cv.COLOR_BGR2GRAY), (3, 3), 0, 0)
+        old, new = old[40:100], new[40:100]
+
+        feature_params = dict(maxCorners=100,
+                              qualityLevel=0.1,
+                              minDistance=30,
+                              blockSize=7)
+        p0 = cv.goodFeaturesToTrack(old, mask=None, **feature_params)
+
+        lk_params = dict(winSize=(15, 15),
+                         maxLevel=2,
+                         criteria=(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT,
+                                   10, 0.03))
+
+        p1, st, err = cv.calcOpticalFlowPyrLK(old, new, p0,
+                                              None, **lk_params)
+
+        vels = p1 - p0
+
+        x_vel_list = []
+
+        for i in range(vels.shape[0]):
+            vel = vels[i]
+            x_vel = vel[0, 0]
+            x_vel_list.append(x_vel)
+
+        return x_vel_list
+
+    def get_frame_disp(self, frame1, frame2):
+        x_vel_arr = self.get_vel_arr(frame1, frame2)
+        return np.median(x_vel_arr)
+
+    def compute_vid_disps(self, step_size=1):
+        self.disp_arr[0] = 0
+        for i in range(step_size, len(self.disp_arr), step_size):
+            disp = self.get_frame_disp(self.vid[i - step_size], self.vid[i])
+            for j in range(i - step_size + 1, i + 1):
+                self.disp_arr[j] = self.disp_arr[i - step_size] + disp * ((j - (i - step_size)) / step_size)
+        for i in range(len(self.disp_arr)):
+            disp = np.array([self.disp_arr[i], 0, self.disp_arr[i], 0])
+            if self.left_list[i] is not None:
+                self.true_left_list[i] = self.left_list[i] - disp
+            if self.right_list[i] is not None:
+                self.true_right_list[i] = self.right_list[i] - disp
+
     # --------------------------------------------------- main method
 
     def main(self, step_size=5):
@@ -439,9 +561,11 @@ class Clip:
 
         self.extract_left_right()
         self.prune_inconsistencies_vid()
-        self.add_more_left_right()
+        #self.add_more_left_right()
         self.interpolate_vid_left()
         self.interpolate_vid_right()
+
+        self.compute_vid_disps(step_size=1)
 
         self.draw_all_boxes_on_vid()
         self.draw_original_boxes_on_vid()
@@ -454,6 +578,35 @@ class Clip:
         pickle.dump(self.box_list_list, open(os.path.join(dir, 'box_list_lists', filename), 'wb'))
         pickle.dump(self.left_list, open(os.path.join(dir, 'left_lists', filename), 'wb'))
         pickle.dump(self.right_list, open(os.path.join(dir, 'right_lists', filename), 'wb'))
+        pickle.dump(self.disp_arr, open(os.path.join(dir, 'disp_arrs', filename), 'wb'))
+
+    def save_true_left_right_csv(self, dir, filename):
+        x_left_list = [Clip.get_box_centre(box) for box in self.true_left_list]
+        x_right_list = [Clip.get_box_centre(box) for box in self.true_right_list]
+
+        for i in range(len(x_left_list)):
+            if x_left_list[i] is not None:
+                x_left_list[i] = x_left_list[i][0].item()
+            if x_right_list[i] is not None:
+                x_right_list[i] = x_right_list[i][0].item()
+
+        left_light = self.get_left_light_time()
+        right_light = self.get_right_light_time()
+
+        if left_light is None:
+            left_light = len(self.vid)
+        if right_light is None:
+            right_light = len(self.vid)
+
+        light_time = min(left_light, right_light) + 3
+
+        x_left_list = x_left_list[:light_time]
+        x_right_list = x_right_list[:light_time]
+
+        x_left_list = ['Left'] + x_left_list
+        x_right_list = ['Right'] + x_right_list
+
+        np.savetxt(os.path.join(dir, filename), [p for p in zip(x_left_list, x_right_list)], delimiter=',', fmt='%s')
 
 
 
@@ -464,14 +617,17 @@ class Clip:
 model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
 svm = pickle.load(open('/Users/sebastianmonnet/PycharmProjects/yolov5_fencing/svm.pt', 'rb'))
 
-a = Clip(12010, svm, model=model)
+'''start = datetime.datetime.now()
+a = Clip(530, svm, model=model)
 a.main()
-a.play_vid(60)
+print(datetime.datetime.now() - start)
 
-'''clip_inds = [i for i in range(11900, 12100, 10)]
+a.play_vid_with_disp(60, start=0)'''
 
-for ind in clip_inds:
-    Clip.download_clip('clips/', ind)
+clip_inds = [i for i in range(400, 600, 10)]
+
+#for ind in clip_inds:
+#    Clip.download_clip('clips/', ind)
 
 for ind in clip_inds:
     print('ind:', ind)
@@ -481,7 +637,8 @@ for ind in clip_inds:
     a = Clip(path, svm, model=model)
     a.main()
     a.save_data('extracted_data', str(ind) + '.pt')
-    print(datetime.datetime.now() - start)'''
+    a.save_true_left_right_csv('extracted_data/true_left_right_csvs', str(ind) + '.csv')
+    print(datetime.datetime.now() - start)
 
 
 
@@ -490,7 +647,7 @@ for ind in clip_inds:
 
 
 
-# troublesome inds: 8015 (ref), 4312 (missing fencer), 723 (cross), 7848, 8135, 11315, 12205
+# troublesome inds: 8015 (ref), 4312 (missing fencer), 723 (cross), 7848, 8135, 11315, 12205, 12010
 
 
 
