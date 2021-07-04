@@ -22,6 +22,9 @@ class Clip:
         self.brightness_thresh = 50
         self.x_dist_thresh = 8
         self.y_dist_thresh = 5
+
+        self.small_dist_thresh = 10
+        self.big_dist_thresh = 10
         self.comp_time_lag = 40
         self.top_crop = 0 / 360
         self.bottom_crop = 341 / 360
@@ -444,14 +447,22 @@ class Clip:
         return comp_list
 
     def prune_inconsistencies_single_list(self, box_list):
-        comp_list = self.get_comps(box_list)
-        max_ind = 0
-        for i, elem in enumerate(comp_list):
-            if len(elem) > len(comp_list[max_ind]):
-                max_ind = i
+        non_none = [i for i in range(len(box_list)) if box_list[i] is not None]
+        new_box_list = copy.deepcopy(box_list)
+        for ind in range(1, len(non_none) - 1):
+            i = non_none[ind - 1]
+            j = non_none[ind]
+            k = non_none[ind + 1]
+            dist_ij = Clip.get_box_distance(box_list[i], box_list[j])
+            dist_jk = Clip.get_box_distance(box_list[j], box_list[k])
+            dist_ik = Clip.get_box_distance(box_list[i], box_list[k])
+            if dist_ik < self.small_dist_thresh * (k - i) \
+                    and dist_jk > self.big_dist_thresh * (k - j)\
+                    and dist_ij > self.big_dist_thresh * (j - i):
+                new_box_list[j] = None
         for i in range(len(box_list)):
-            if i not in comp_list[max_ind]:
-                box_list[i] = None
+            box_list[i] = new_box_list[i]
+
 
     def prune_inconsistencies_vid(self):
         self.prune_inconsistencies_single_list(self.true_left_list)
@@ -568,7 +579,7 @@ class Clip:
         self.compute_vid_disps(step_size=1)
 
 
-        #self.prune_inconsistencies_vid()
+        self.prune_inconsistencies_vid()
         #self.add_more_left_right()
         self.interpolate_vid_left()
         self.interpolate_vid_right()
@@ -585,6 +596,8 @@ class Clip:
         pickle.dump(self.box_list_list, open(os.path.join(dir, 'box_list_lists', filename), 'wb'))
         pickle.dump(self.left_list, open(os.path.join(dir, 'left_lists', filename), 'wb'))
         pickle.dump(self.right_list, open(os.path.join(dir, 'right_lists', filename), 'wb'))
+        pickle.dump(self.true_left_list, open(os.path.join(dir, 'true_left_lists', filename), 'wb'))
+        pickle.dump(self.true_right_list, open(os.path.join(dir, 'true_right_lists', filename), 'wb'))
         pickle.dump(self.disp_arr, open(os.path.join(dir, 'disp_arrs', filename), 'wb'))
 
     def save_true_left_right_csv(self, dir, filename):
@@ -624,19 +637,19 @@ class Clip:
 model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
 svm = pickle.load(open('/Users/sebastianmonnet/PycharmProjects/yolov5_fencing/svm.pt', 'rb'))
 
-start = datetime.datetime.now()
+'''start = datetime.datetime.now()
 a = Clip(530, svm, model=model)
 a.main()
 print(datetime.datetime.now() - start)
 
-a.play_vid_with_disp(60, start=0)
+a.play_vid_with_disp(60, start=0)'''
 
 clip_inds = [i for i in range(400, 600, 10)]
 
 #for ind in clip_inds:
 #    Clip.download_clip('clips/', ind)
 
-'''for ind in clip_inds:
+for ind in clip_inds:
     print('ind:', ind)
     start = datetime.datetime.now()
     path = 'clips/' + str(ind) + '.mp4'
@@ -645,7 +658,7 @@ clip_inds = [i for i in range(400, 600, 10)]
     a.main()
     a.save_data('extracted_data', str(ind) + '.pt')
     a.save_true_left_right_csv('extracted_data/true_left_right_csvs', str(ind) + '.csv')
-    print(datetime.datetime.now() - start)'''
+    print(datetime.datetime.now() - start)
 
 
 

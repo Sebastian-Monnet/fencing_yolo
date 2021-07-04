@@ -66,10 +66,14 @@ class Viewer:
                 self.draw_right_on_frame(i)
 
     def draw_left_on_frame(self, frame_ind):
-        self.draw_box(frame_ind, self.left_list[frame_ind], colour_channel=2)
+        disp = self.disp_arr[frame_ind]
+        disp_arr = np.array([disp, 0, disp, 0])
+        self.draw_box(frame_ind, self.left_list[frame_ind] + disp_arr, colour_channel=2)
 
     def draw_right_on_frame(self, frame_ind):
-        self.draw_box(frame_ind, self.right_list[frame_ind], colour_channel=1)
+        disp = self.disp_arr[frame_ind]
+        disp_arr = np.array([disp, 0, disp, 0])
+        self.draw_box(frame_ind, self.right_list[frame_ind] + disp_arr, colour_channel=1)
 
     def play_vid(self, wait=30, start=0):
         vid = self.vid.astype('uint8')
@@ -95,11 +99,11 @@ class Viewer:
 
 
 
-clip_inds = [i for i in range(530, 600, 10)]
+clip_inds = [i for i in range(400, 600, 10)]
 
 #clip_inds = [590]
 for ind in clip_inds:
-    modes = ['box_list_lists/', 'left_lists/', 'right_lists/', 'disp_arrs/']
+    modes = ['box_list_lists/', 'true_left_lists/', 'true_right_lists/', 'disp_arrs/']
     vid_path = 'clips/' + str(ind) + '.mp4'
     filenames = ['extracted_data/' + mode + str(ind) + '.pt' for mode in modes]
     box_list_list, left_list, right_list, disp_arr = [pickle.load(open(filenames[i], 'rb')) for i in range(4)]
