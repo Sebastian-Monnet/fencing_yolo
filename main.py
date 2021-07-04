@@ -20,7 +20,7 @@ class Clip:
     def __init__(self, loc, svm, step_size=5, model=None):
         self.step_size = step_size
         self.brightness_thresh = 50
-        self.x_dist_thresh = 10
+        self.x_dist_thresh = 8
         self.y_dist_thresh = 5
         self.comp_time_lag = 40
         self.top_crop = 0 / 360
@@ -169,16 +169,20 @@ class Clip:
 
     def draw_all_boxes_on_vid(self):
         for i, box_list in enumerate(self.box_list_list):
-            if self.left_list[i] is not None:
+            if self.true_left_list[i] is not None:
                 self.draw_left_on_frame(i)
-            if self.right_list[i] is not None:
+            if self.true_right_list[i] is not None:
                 self.draw_right_on_frame(i)
 
     def draw_left_on_frame(self, frame_ind):
-        self.draw_box(frame_ind, self.left_list[frame_ind], colour_channel=2)
+        disp = self.disp_arr[frame_ind]
+        disp_arr = np.array([disp, 0, disp, 0])
+        self.draw_box(frame_ind, self.true_left_list[frame_ind] + disp_arr, colour_channel=2)
 
     def draw_right_on_frame(self, frame_ind):
-        self.draw_box(frame_ind, self.right_list[frame_ind], colour_channel=1)
+        disp = self.disp_arr[frame_ind]
+        disp_arr = np.array([disp, 0, disp, 0])
+        self.draw_box(frame_ind, self.true_right_list[frame_ind] + disp_arr, colour_channel=1)
 
 
 
@@ -450,8 +454,8 @@ class Clip:
                 box_list[i] = None
 
     def prune_inconsistencies_vid(self):
-        self.prune_inconsistencies_single_list(self.left_list)
-        self.prune_inconsistencies_single_list(self.right_list)
+        self.prune_inconsistencies_single_list(self.true_left_list)
+        self.prune_inconsistencies_single_list(self.true_right_list)
 
     # ------------------------------------- Interpolate boxes
 
@@ -462,28 +466,28 @@ class Clip:
         return box1 + proportion * disp
 
     def interpolate_frames_left(self, ind1, ind2, cur_ind):
-        left_1 = self.left_list[ind1]
+        left_1 = self.true_left_list[ind1]
 
-        left_2 = self.left_list[ind2]
+        left_2 = self.true_left_list[ind2]
 
-        self.left_list[cur_ind] = Clip.interpolate_pair(left_1, left_2, ind1, ind2, cur_ind)
+        self.true_left_list[cur_ind] = Clip.interpolate_pair(left_1, left_2, ind1, ind2, cur_ind)
 
     def interpolate_frames_right(self, ind1, ind2, cur_ind):
-        right_1 = self.right_list[ind1]
+        right_1 = self.true_right_list[ind1]
 
-        right_2 = self.right_list[ind2]
+        right_2 = self.true_right_list[ind2]
 
-        self.right_list[cur_ind] = Clip.interpolate_pair(right_1, right_2, ind1, ind2, cur_ind)
+        self.true_right_list[cur_ind] = Clip.interpolate_pair(right_1, right_2, ind1, ind2, cur_ind)
 
     def interpolate_vid_left(self):
-        not_none = [i for i in range(len(self.box_list_list)) if self.left_list[i] is not None]
+        not_none = [i for i in range(len(self.box_list_list)) if self.true_left_list[i] is not None]
         for i, ind1 in enumerate(not_none[:-1]):
             ind2 = not_none[i + 1]
             for j in range(ind1 + 1, ind2):
                 self.interpolate_frames_left(ind1, ind2, j)
 
     def interpolate_vid_right(self):
-        not_none = [i for i in range(len(self.box_list_list)) if self.right_list[i] is not None]
+        not_none = [i for i in range(len(self.box_list_list)) if self.true_right_list[i] is not None]
         for i, ind1 in enumerate(not_none[:-1]):
             ind2 = not_none[i + 1]
             for j in range(ind1 + 1, ind2):
@@ -560,12 +564,15 @@ class Clip:
         self.prune_with_linreg()
 
         self.extract_left_right()
-        self.prune_inconsistencies_vid()
+
+        self.compute_vid_disps(step_size=1)
+
+
+        #self.prune_inconsistencies_vid()
         #self.add_more_left_right()
         self.interpolate_vid_left()
         self.interpolate_vid_right()
 
-        self.compute_vid_disps(step_size=1)
 
         self.draw_all_boxes_on_vid()
         self.draw_original_boxes_on_vid()
@@ -617,19 +624,19 @@ class Clip:
 model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
 svm = pickle.load(open('/Users/sebastianmonnet/PycharmProjects/yolov5_fencing/svm.pt', 'rb'))
 
-'''start = datetime.datetime.now()
+start = datetime.datetime.now()
 a = Clip(530, svm, model=model)
 a.main()
 print(datetime.datetime.now() - start)
 
-a.play_vid_with_disp(60, start=0)'''
+a.play_vid_with_disp(60, start=0)
 
 clip_inds = [i for i in range(400, 600, 10)]
 
 #for ind in clip_inds:
 #    Clip.download_clip('clips/', ind)
 
-for ind in clip_inds:
+'''for ind in clip_inds:
     print('ind:', ind)
     start = datetime.datetime.now()
     path = 'clips/' + str(ind) + '.mp4'
@@ -638,7 +645,7 @@ for ind in clip_inds:
     a.main()
     a.save_data('extracted_data', str(ind) + '.pt')
     a.save_true_left_right_csv('extracted_data/true_left_right_csvs', str(ind) + '.csv')
-    print(datetime.datetime.now() - start)
+    print(datetime.datetime.now() - start)'''
 
 
 

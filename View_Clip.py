@@ -95,9 +95,9 @@ class Viewer:
 
 
 
-clip_inds = [i for i in range(400, 600, 10)]
+clip_inds = [i for i in range(530, 600, 10)]
 
-#clip_inds = [530]
+#clip_inds = [590]
 for ind in clip_inds:
     modes = ['box_list_lists/', 'left_lists/', 'right_lists/', 'disp_arrs/']
     vid_path = 'clips/' + str(ind) + '.mp4'
