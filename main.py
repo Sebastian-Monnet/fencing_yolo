@@ -663,10 +663,6 @@ for ind in clip_inds:
 
 
 
-
-
-
-
 # troublesome inds: 8015 (ref), 4312 (missing fencer), 723 (cross), 7848, 8135, 11315, 12205, 12010
 
 
