@@ -33,6 +33,7 @@ class Clip:
         self.vert_IOU_thresh = 0.7
         self.grid_size = 10
 
+
         self.svm = svm
 
         self.vid = Clip.load_vid(loc)
@@ -263,12 +264,14 @@ class Clip:
 
     def prune_small_boxes(self):
         small_list = []
+        biggest_perim = 0
         for box_list in self.box_list_list:
             if box_list is None or len(box_list) <= 1:
                 continue
             else:
                 perim_list = sorted([Clip.get_box_perimeter(box) for box in box_list])
                 small_list.append(perim_list[-2])
+                biggest_perim = max(biggest_perim, perim_list[-1])
         if small_list == []:
             return
         mean = np.mean(small_list)
@@ -277,7 +280,8 @@ class Clip:
         for i, box_list in enumerate(self.box_list_list):
             if box_list is None:
                 continue
-            self.box_list_list[i] = [box for box in box_list if Clip.get_box_perimeter(box) >= mean - 1.5 * std]
+            self.box_list_list[i] = [box for box in box_list if Clip.get_box_perimeter(box)
+                                     >= max(mean - 1.5 * std, biggest_perim / 2)]
 
     def prune_high_boxes(self):
         for i, box_list in enumerate(self.box_list_list):
@@ -638,16 +642,16 @@ model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
 svm = pickle.load(open('/Users/sebastianmonnet/PycharmProjects/yolov5_fencing/svm.pt', 'rb'))
 
 '''start = datetime.datetime.now()
-a = Clip(530, svm, model=model)
+a = Clip(1110, svm, model=model)
 a.main()
 print(datetime.datetime.now() - start)
 
 a.play_vid_with_disp(60, start=0)'''
 
-clip_inds = [i for i in range(400, 600, 10)]
+clip_inds = [i for i in range(1100, 1400, 10)]
 
-#for ind in clip_inds:
-#    Clip.download_clip('clips/', ind)
+for ind in clip_inds:
+    Clip.download_clip('clips/', ind)
 
 for ind in clip_inds:
     print('ind:', ind)

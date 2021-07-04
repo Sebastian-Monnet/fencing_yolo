@@ -99,7 +99,7 @@ class Viewer:
 
 
 
-clip_inds = [i for i in range(400, 600, 10)]
+clip_inds = [i for i in range(1110, 1120, 10)]
 
 #clip_inds = [590]
 for ind in clip_inds:
